@@ -1,9 +1,13 @@
-use std::fmt;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::{
+    ffi::CStr,
+    fmt,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+};
 
-use crate::ffi::pfvar::pfsync_state_host;
-use crate::{ffi::pfvar::pfsync_state, Direction, Proto};
-use crate::{Error, ErrorInternal, Result};
+use crate::{
+    ffi::pfvar::{pfsync_state, pfsync_state_host},
+    Direction, Error, ErrorInternal, Proto, Result,
+};
 
 /// PF connection state created by a stateful rule
 #[derive(Clone)]
@@ -15,6 +19,7 @@ pub struct State {
 impl fmt::Debug for State {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("State")
+            .field("interface_name", &self.interface_name())
             .field("direction", &self.direction())
             .field("proto", &self.proto())
             .field("local_address", &self.local_address())
@@ -31,6 +36,29 @@ impl State {
     /// All bytes in `sync_state` must be initialized.
     pub(crate) unsafe fn new(sync_state: pfsync_state) -> State {
         State { sync_state }
+    }
+
+    /// Return the interface name for this state
+    pub fn interface_name(&self) -> Result<String> {
+        // SAFETY: the pointer is valid according to the contract of `Self::new`.
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                self.sync_state.ifname.as_ptr().cast(),
+                self.sync_state.ifname.len(),
+            )
+        };
+
+        CStr::from_bytes_until_nul(&bytes)
+            .map_err(|_| {
+                Error::from(ErrorInternal::InvalidInterfaceName(
+                    "no nil terminator found",
+                ))
+            })
+            .and_then(|s| {
+                s.to_str().map(|s| s.to_owned()).map_err(|_| {
+                    Error::from(ErrorInternal::InvalidInterfaceName("invalid encoding"))
+                })
+            })
     }
 
     /// Return the direction for this state
